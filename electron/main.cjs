@@ -12,6 +12,27 @@ function controlCachePath() {
   return path.join(app.getPath('userData'), 'control-status.json');
 }
 
+function controlLogPath() { return path.join(app.getPath('userData'), 'control.log'); }
+
+function safeControlSource(source) {
+  try {
+    const url = new URL(source);
+    url.search = url.search ? '?[REDACTED]' : '';
+    url.username = url.username ? '[REDACTED]' : '';
+    url.password = url.password ? '[REDACTED]' : '';
+    return url.toString();
+  } catch { return path.resolve(source); }
+}
+
+async function controlLog(event, details = {}) {
+  const entry = JSON.stringify({ time: new Date().toISOString(), event, ...details });
+  console.log(`[JournalPro control] ${entry}`);
+  try {
+    await fs.mkdir(path.dirname(controlLogPath()), { recursive: true });
+    await fs.appendFile(controlLogPath(), `${entry}\n`, 'utf8');
+  } catch (error) { console.warn('[JournalPro control] Could not write control.log:', error.message); }
+}
+
 async function readCachedControlStatus() {
   try {
     const cached = JSON.parse(await fs.readFile(controlCachePath(), 'utf8'));
@@ -37,60 +58,62 @@ function parseControlPayload(raw) {
   const text = String(raw || '').trim();
   if (!text) throw new Error('Empty control response');
 
-  try {
-    const body = JSON.parse(text);
-    if (typeof body === 'string') return parseControlPayload(body);
-    if (body?.status === 'disabled') {
-      return {
-        status: 'disabled',
-        message: String(body.message || 'Cette installation a été désactivée par l’administrateur.'),
-      };
-    }
-    if (body?.status === 'active') return { status: 'active' };
-    throw new Error('Invalid JSON control status');
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
-  }
-
   const [command, ...messageParts] = text.split(/\r?\n/);
-  const normalized = command.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
-  if (['active', 'enabled', 'enable', 'keep working', 'keep'].includes(normalized)) {
-    return { status: 'active' };
-  }
-  if (['disabled', 'disable', 'inactive', 'stop', 'blocked'].includes(normalized)) {
+  const normalized = command.trim().toLowerCase();
+  if (normalized === 'active') return { status: 'active' };
+  if (normalized === 'desactive') {
     return {
       status: 'disabled',
       message: messageParts.join('\n').trim() || 'Cette installation a été désactivée par l’administrateur.',
     };
   }
-  throw new Error(`Unknown control command: ${command}`);
+  throw new Error(`Invalid GitHub control content: expected "active" or "desactive", received "${command}"`);
+}
+
+function normalizeGitHubFileUrl(source) {
+  const endpoint = new URL(source);
+  if (endpoint.protocol !== 'https:') throw new Error('GitHub control URL must use HTTPS.');
+  if (endpoint.hostname === 'raw.githubusercontent.com') return endpoint;
+  if (endpoint.hostname === 'github.com') {
+    const match = endpoint.pathname.match(/^\/([^/]+)\/([^/]+)\/(?:blob|edit)\/([^/]+)\/(.+)$/);
+    if (!match) throw new Error('GitHub URL must point to a repository file using the /blob/ or /edit/ format.');
+    return new URL(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${match[3]}/${match[4]}`);
+  }
+  throw new Error(`Control URL host is not allowed: ${endpoint.hostname}`);
 }
 
 async function readControlSource(source) {
-  if (/^file:/i.test(source)) return fs.readFile(new URL(source), 'utf8');
-  if (!/^https?:/i.test(source)) return fs.readFile(path.resolve(source), 'utf8');
-
-  const endpoint = new URL(source);
-  if (endpoint.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(endpoint.hostname)) {
-    throw new Error('Remote control endpoint must use HTTPS.');
-  }
+  const endpoint = normalizeGitHubFileUrl(source);
   const response = await fetch(endpoint, {
-    headers: { 'accept': 'application/json, text/plain', 'user-agent': `JournalPro/${app.getVersion()}` },
+    headers: { 'accept': 'text/plain', 'user-agent': `JournalPro/${app.getVersion()}` },
     signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
+  return { content: await response.text(), sourceType: 'github-file', requestedUrl: safeControlSource(endpoint.toString()), httpStatus: response.status };
 }
 
 async function getControlStatus() {
-  if (!CONTROL_ENDPOINT) return readCachedControlStatus();
+  const checkId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await controlLog('check-start', { checkId, configured: Boolean(CONTROL_ENDPOINT), source: CONTROL_ENDPOINT ? safeControlSource(CONTROL_ENDPOINT) : null, logFile: controlLogPath() });
+  if (!CONTROL_ENDPOINT) {
+    const cached = await readCachedControlStatus();
+    await controlLog('decision', { checkId, status: cached.status, reason: 'no-endpoint-configured; using-cache' });
+    return cached;
+  }
   try {
-    const status = parseControlPayload(await readControlSource(CONTROL_ENDPOINT));
+    const result = await readControlSource(CONTROL_ENDPOINT);
+    await controlLog('response', { checkId, sourceType: result.sourceType, requestedUrl: result.requestedUrl, httpStatus: result.httpStatus, content: result.content.slice(0, 4096), truncated: result.content.length > 4096 });
+    const status = parseControlPayload(result.content);
+    await controlLog('parse-success', { checkId, parsedStatus: status.status, message: status.message || null });
     await saveControlStatus(status);
+    await controlLog('cache-updated', { checkId, cacheFile: controlCachePath(), status: status.status });
+    await controlLog('decision', { checkId, status: status.status, reason: 'valid-source-response' });
     return status;
   } catch (error) {
-    console.warn('Remote control check failed; using last saved status.', error.message);
-    return readCachedControlStatus();
+    await controlLog('check-error', { checkId, error: error.message, stack: error.stack || null });
+    const cached = await readCachedControlStatus();
+    await controlLog('decision', { checkId, status: cached.status, reason: 'request-or-parse-failed; using-cache' });
+    return cached;
   }
 }
 

@@ -27,41 +27,28 @@ Définissez `JOURNALPRO_CONTROL_ENDPOINT` avec une URL HTTPS avant de démarrer 
 Vous pouvez aussi le placer dans `.env` à la racine du projet :
 
 ```dotenv
-JOURNALPRO_CONTROL_ENDPOINT="file:///C:/JournalPro/control.txt"
+JOURNALPRO_CONTROL_ENDPOINT="https://github.com/OWNER/REPOSITORY/blob/main/control.txt"
 ```
 
 Après une modification de `.env`, arrêtez puis redémarrez complètement `npm run dev`. Un simple rechargement de la page Vite ne redémarre pas le processus principal Electron.
 
-Réponse normale :
+Contenu normal : `active`.
 
-```json
-{ "status": "active" }
-```
+Contenu de désactivation : `desactive`, avec un message facultatif sur les lignes suivantes.
 
-Réponse de désactivation :
-
-```json
-{ "status": "disabled", "message": "Licence suspendue. Contactez le support." }
-```
-
-La source peut aussi être un fichier texte distant, une URL `file://` ou un chemin local. La première ligne contient la commande et les lignes suivantes peuvent contenir le message :
+La source doit être un fichier texte public GitHub. Les liens `github.com/.../blob/...`, `github.com/.../edit/...` et `raw.githubusercontent.com/...` sont acceptés. Les liens `blob` et `edit` sont automatiquement convertis vers le contenu brut. La première ligne contient la commande et les lignes suivantes peuvent contenir le message :
 
 ```text
-disabled
+desactive
 Licence suspendue. Contactez le support.
 ```
 
-Commandes actives reconnues : `active`, `enabled`, `enable`, `keep working`, `keep`.
-
-Commandes de désactivation reconnues : `disabled`, `disable`, `inactive`, `stop`, `blocked`.
-
-Exemple avec un fichier local :
-
-```powershell
-$env:JOURNALPRO_CONTROL_ENDPOINT="C:\JournalPro\control.txt"
-npm run dev
-```
+Les deux seules commandes reconnues sont `active` et `desactive` (insensibles à la casse). Tout autre contenu est rejeté et l'état local précédemment enregistré est conservé.
 
 Chaque réponse valide est enregistrée dans le dossier de données utilisateur d'Electron (`control-status.json`). Si la dernière réponse confirmée était `disabled`, l'application reste désactivée hors connexion et après redémarrage. Seule une réponse ultérieure valide avec `active` la réactive. Lors d'une première utilisation sans état enregistré, une erreur réseau laisse l'application active.
 
 Ce mécanisme désactive l'interface sans supprimer l'application ni les données comptables de l'utilisateur.
+
+### Journal de diagnostic
+
+Chaque vérification est affichée dans le terminal Electron et ajoutée à `control.log` dans le dossier de données utilisateur Electron. Le journal contient la source demandée, le type de source, le statut HTTP, le contenu reçu (limité à 4 Ko), le résultat du parsing, les erreurs, l'utilisation éventuelle du cache et la décision finale. Les paramètres de requête et identifiants d'URL sont masqués.
