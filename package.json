@@ -1,0 +1,51 @@
+{
+  "name": "journalpro",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Application Electron de conversion de factures PDF en journal comptable",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "build": "tsc -b && vite build",
+    "start": "electron .",
+    "dist": "npm run build && electron-builder",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.6",
+    "@fontsource/jetbrains-mono": "^5.2.6",
+    "dotenv": "^17.4.2",
+    "lucide-react": "^0.536.0",
+    "pdfjs-dist": "^5.4.54",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.0",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.1",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "dz.journalpro.app",
+    "productName": "JournalPro",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      ".env"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
